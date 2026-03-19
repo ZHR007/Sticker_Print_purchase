@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Sticker Printer",
+  "version": "1.2",
+  "description": "Print purchase order stickers from the current page.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://yy.singbada.cn/*",
+    "https://yiyunapi.singbada.cn/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_start"
+    }
+  ]
+}

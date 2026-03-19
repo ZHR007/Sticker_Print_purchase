@@ -1,0 +1,226 @@
+/* Print Button Style */
+.sticker-print-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  padding: 10px 20px;
+  background-color: #409eff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  font-size: 14px;
+  font-family: "Microsoft YaHei", sans-serif;
+}
+
+.sticker-print-btn:hover {
+  background-color: #66b1ff;
+}
+
+.sticker-refresh-btn {
+  bottom: 72px;
+  background-color: #67c23a;
+}
+
+.sticker-refresh-btn:hover {
+  background-color: #85ce61;
+}
+
+/* Print Area Styles (Hidden on screen) */
+@media screen {
+  #sticker-print-area {
+    display: none;
+  }
+}
+
+/* Print Styles */
+@media print {
+  @page {
+    size: 100mm 100mm;
+    margin: 0;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+  
+  #sticker-print-area, #sticker-print-area * {
+    visibility: visible;
+  }
+
+  #sticker-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  .sticker-page {
+    width: 100mm;
+    height: 100mm;
+    box-sizing: border-box;
+    padding: 3mm; /* Small padding */
+    margin: 0 auto;
+    page-break-after: always;
+    display: flex;
+    flex-direction: column;
+    font-family: "Microsoft YaHei", "Heiti SC", sans-serif;
+    color: #000;
+    background: white;
+    overflow: hidden;
+  }
+
+  /* Main Container Box */
+  .sticker-content {
+      border: 2px solid #000;
+      border-radius: 4px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+  }
+
+  /* Header Section */
+  .sticker-header {
+    padding: 8px 10px;
+    border-bottom: 2px solid #000;
+    flex-shrink: 0;
+  }
+  
+  .sticker-line {
+      display: flex;
+      align-items: flex-start; /* Ensure label stays at top if value wraps */
+      line-height: 1.2;
+      margin-bottom: 4px;
+  }
+  .sticker-line:last-child {
+      margin-bottom: 0;
+  }
+
+  .header-label {
+      font-weight: 900;
+      font-size: 18px; /* Bold label */
+      width: 100px;
+      flex-shrink: 0;
+      margin-top: 2px; /* Small visual alignment fix for flex-start */
+  }
+  
+  .header-colon {
+      margin: 0 2px;
+      font-weight: bold;
+      display: none; /* Hide colon if label has it or just use spacing */
+  }
+
+  .header-value {
+      font-weight: bold;
+      font-size: 18px;
+      word-break: break-all;
+      overflow: hidden;
+      flex-grow: 1; /* Allow taking remaining space */
+      width: 0; /* Critical for flex wrap to work inside flex container */
+  }
+
+  .header-value.order-no {
+      font-size: 24px; /* Extra Large for Order No */
+  }
+
+  .header-value.long-skc {
+      font-size: 16px; /* Smaller font for long SKC (>20 chars) */
+  }
+
+  /* Body Section (Table) */
+  .sticker-body-table-wrapper {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      position: relative;
+  }
+
+  .sticker-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+  }
+
+  .sticker-table tr {
+      /* min-height logic handled by cell padding */
+  }
+
+  .sticker-table td {
+      padding: 6px 8px; /* Comfortable spacing */
+      vertical-align: top;
+      font-size: 16px;
+      line-height: 1.3;
+  }
+
+  .td-label {
+      width: 100px; /* Fixed width for labels */
+      border-right: 1px solid #000; /* Vertical divider line */
+      font-weight: normal;
+      text-align: justify;
+      text-align-last: justify;
+  }
+
+  .td-value {
+      font-weight: 500;
+      word-break: break-all;
+      padding-left: 12px;
+  }
+  
+  .td-value.bold {
+      font-weight: 900;
+  }
+
+  .td-value.supplier {
+      font-size: 18px;
+      font-weight: 900;
+  }
+  
+  .td-label.supplier-label {
+      font-size: 18px;
+      font-weight: 900;
+  }
+
+  /* Footer Section */
+  .sticker-footer {
+    padding: 10px;
+    flex-shrink: 0;
+  }
+
+  .footer-box {
+      border: 2px solid #000;
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #fff; /* Ensure white background */
+  }
+
+  .footer-label {
+      font-size: 18px;
+      font-weight: bold;
+  }
+
+  .footer-value {
+      font-size: 28px;
+      font-weight: 900;
+      color: #003366; /* Dark Blue as requested */
+      margin-left: auto;
+      margin-right: 5px;
+  }
+  
+  .footer-unit {
+      font-size: 18px;
+      font-weight: bold;
+      color: #003366;
+      margin-top: 6px; /* Align baseline visually */
+  }
+
+  /* Helper to fill page */
+  .sticker-page {
+      /* Center content vertically if needed, but usually top aligned is better for lists */
+  }
+}
