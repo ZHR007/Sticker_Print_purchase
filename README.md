@@ -1,0 +1,1 @@
+# Sticker Printer Extension
