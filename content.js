@@ -8,11 +8,20 @@ let currentAuthToken = '';
 let refreshInProgress = false;
 let refreshTimer = null;
 let refreshResolver = null;
+let buttonsDragging = false;
+let suppressButtonClickUntil = 0;
+const purchaseOrderIndexCache = new Map();
+const purchaseDetailSlipCountCache = new Map();
 const BUTTON_TEXT_REFRESH = '刷新数据';
 const BUTTON_TEXT_PRINT = '打印贴纸';
 const DEBUG_PREFIX = '[StickerDebug]';
 const TARGET_ORIGIN = 'https://yy.singbada.cn';
 const TARGET_PATH_PREFIX = '/purchasingManagement';
+const BUTTON_CONTAINER_ID = 'sticker-btn-container';
+const BUTTON_BOTTOM_STORAGE_KEY = 'sticker_button_bottom_px_v1';
+const DEFAULT_BUTTON_BOTTOM_PX = 92;
+const BUTTON_DRAG_MODE_ATTR = 'data-sticker-drag-mode';
+const BUTTON_DRAG_MODE_LONGPRESS = 'longpress_v1';
 
 function maskToken(token) {
   if (!token) return '';
@@ -42,6 +51,137 @@ function removeActionButtons() {
   if (refreshBtn) refreshBtn.remove();
   const printBtn = document.getElementById('sticker-print-btn');
   if (printBtn) printBtn.remove();
+  const container = document.getElementById(BUTTON_CONTAINER_ID);
+  if (container) container.remove();
+}
+
+async function getStoredButtonBottomPx() {
+  try {
+    const res = await chrome.storage.local.get([BUTTON_BOTTOM_STORAGE_KEY]);
+    const v = res?.[BUTTON_BOTTOM_STORAGE_KEY];
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_BUTTON_BOTTOM_PX;
+  } catch {
+    return DEFAULT_BUTTON_BOTTOM_PX;
+  }
+}
+
+async function setStoredButtonBottomPx(value) {
+  try {
+    await chrome.storage.local.set({ [BUTTON_BOTTOM_STORAGE_KEY]: value });
+  } catch {}
+}
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+async function ensureButtonContainer() {
+  if (!isTopWindow) return null;
+  let container = document.getElementById(BUTTON_CONTAINER_ID);
+  if (container) {
+    const dragMode = container.getAttribute(BUTTON_DRAG_MODE_ATTR);
+    const hasLegacyHandle = Boolean(container.querySelector('.sticker-btn-handle'));
+    if (dragMode !== BUTTON_DRAG_MODE_LONGPRESS || hasLegacyHandle) {
+      container.remove();
+      container = null;
+    }
+  }
+  if (!container) {
+    container = document.createElement('div');
+    container.id = BUTTON_CONTAINER_ID;
+    container.className = 'sticker-btn-container';
+    container.setAttribute(BUTTON_DRAG_MODE_ATTR, BUTTON_DRAG_MODE_LONGPRESS);
+    document.body.appendChild(container);
+    const bottom = await getStoredButtonBottomPx();
+    container.style.bottom = `${bottom}px`;
+
+    let pointerId = null;
+    let startY = 0;
+    let startBottom = bottom;
+    let dragging = false;
+    let dragActivated = false;
+    let longPressTimer = null;
+    const LONG_PRESS_MS = 180;
+    const MOVE_CANCEL_PX = 6;
+
+    const beginDrag = (e) => {
+      if (e.button !== 0) return;
+      if (pointerId !== null) return;
+      pointerId = e.pointerId;
+      startY = e.clientY;
+      startBottom = parseFloat(container.style.bottom || `${DEFAULT_BUTTON_BOTTOM_PX}`) || DEFAULT_BUTTON_BOTTOM_PX;
+      dragging = false;
+      buttonsDragging = false;
+      dragActivated = false;
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      longPressTimer = setTimeout(() => {
+        if (pointerId === null) return;
+        dragActivated = true;
+        buttonsDragging = true;
+        container.setAttribute('data-dragging', '1');
+        try {
+          container.setPointerCapture(pointerId);
+        } catch {}
+      }, LONG_PRESS_MS);
+    };
+
+    const moveDrag = (e) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const dy = e.clientY - startY;
+      if (!dragActivated) {
+        if (Math.abs(dy) >= MOVE_CANCEL_PX) {
+          if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          pointerId = null;
+          buttonsDragging = false;
+          dragActivated = false;
+          dragging = false;
+        }
+        return;
+      }
+      dragging = true;
+      e.preventDefault();
+      const newBottom = startBottom - dy;
+      const rect = container.getBoundingClientRect();
+      const maxBottom = window.innerHeight - rect.height - 10;
+      const clamped = clamp(newBottom, 10, Math.max(10, maxBottom));
+      container.style.bottom = `${clamped}px`;
+    };
+
+    const endDrag = async (e) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      try {
+        container.releasePointerCapture(pointerId);
+      } catch {}
+      const shouldSave = dragActivated;
+      pointerId = null;
+      if (shouldSave) {
+        const bottomPx = parseFloat(container.style.bottom || `${DEFAULT_BUTTON_BOTTOM_PX}`) || DEFAULT_BUTTON_BOTTOM_PX;
+        await setStoredButtonBottomPx(bottomPx);
+        suppressButtonClickUntil = Date.now() + 250;
+      }
+      buttonsDragging = false;
+      container.removeAttribute('data-dragging');
+      dragging = false;
+      dragActivated = false;
+    };
+
+    container.addEventListener('pointerdown', beginDrag, true);
+    container.addEventListener('pointermove', moveDrag, true);
+    container.addEventListener('pointerup', endDrag, true);
+    container.addEventListener('pointercancel', endDrag, true);
+  }
+  return container;
 }
 
 function normalizeDate(value) {
@@ -105,6 +245,9 @@ function mapApiItemToSticker(apiItem) {
   };
   const supplierName = normalizeString(apiItem.sewing_factory_name).trim();
   const supplierDisplay = !supplierName || supplierName === '裁床车间' ? '-' : supplierName;
+  const slipCount = Number(apiItem?.__sticker_slip_count);
+  const slipCountInt = Number.isFinite(slipCount) ? Math.round(slipCount) : 0;
+  const slipCountText = slipCountInt > 0 ? `（共${slipCountInt}条）` : '';
   return {
     orderNo: normalizeString(pick(apiItem, ['old_order_ids', 'old_order_id', 'order_sn', 'order_no'])),
     skc: normalizeString(pick(apiItem, ['style_sns', 'style_sn', 'skc', 'sku'])),
@@ -116,7 +259,9 @@ function mapApiItemToSticker(apiItem) {
     supplier: supplierDisplay,
     purchaseDate: normalizeDate(pick(apiItem, ['create_time', 'order_time', 'purchase_time', 'created_at'])),
     deliveryQty: normalizeQty(pick(apiItem, ['actual_num', 'delivery_qty', 'send_num', 'arrival_num', 'quantity', 'num'])),
-    deliveryUnit: normalizeString(pick(apiItem, ['target_unit', 'delivery_unit', 'customer_unit_name', 'base_unit_name']))
+    deliveryUnit: normalizeString(pick(apiItem, ['target_unit', 'delivery_unit', 'customer_unit_name', 'base_unit_name'])),
+    slipCount: slipCountInt,
+    slipCountText
   };
 }
 
@@ -407,9 +552,14 @@ function generateStickers(items) {
 
         <div class="sticker-footer">
             <div class="footer-box">
-                <span class="footer-label">供应商送货数：</span>
-                <span class="footer-value">${item.deliveryQty || '0.00'}</span>
-                <span class="footer-unit">${item.deliveryUnit || ''}</span>
+                <span class="footer-label-group">
+                    <span class="footer-label">送货数：</span>
+                    <span class="footer-slip">${item.slipCountText || ''}</span>
+                </span>
+                <span class="footer-main">
+                    <span class="footer-value">${item.deliveryQty || '0.00'}</span>
+                    <span class="footer-unit">${item.deliveryUnit || ''}</span>
+                </span>
             </div>
         </div>
       </div>
@@ -485,6 +635,281 @@ function isPositiveIntegerString(value) {
   return /^\d+$/.test(String(value || '').trim());
 }
 
+function normalizeOldOrderId(value) {
+  const str = String(value || '').trim();
+  if (!str) return '';
+  if (str.includes(',')) return str.split(',')[0].trim();
+  return str;
+}
+
+function resolveOrderSnStyleSnForPurchaseIndex(record) {
+  const raw = pick(record, ['old_order_id', 'old_order_ids']);
+  if (raw !== '') return normalizeOldOrderId(raw);
+  const fallback = pick(record, ['order_sn', 'order_no']);
+  return String(fallback || '').trim();
+}
+
+function resolvePurchaseSnFromRecord(record) {
+  const raw = pick(record, ['purchase_sn', 'purchase_order_sn', 'po_sn']);
+  return String(raw || '').trim();
+}
+
+function resolveRecordMaterialHints(record) {
+  const materialName = String(pick(record, ['material_name', 'om_material_name', 'supplier_material_name', 'goods_name', 'name']) || '').trim();
+  const materialColor = String(pick(record, ['material_color', 'supplier_color', 'color_name', 'color']) || '').trim();
+  const materialType = String(pick(record, ['material_item', 'order_material_items', 'order_material_item', 'type_name', 'material_type', 'category_name']) || '').trim();
+  const designCode = String(pick(record, ['design_code']) || '').trim();
+  return { materialName, materialColor, materialType, designCode };
+}
+
+function isApiSuccess(json) {
+  return Boolean(json) && (json.code === 200 || json.code === 0 || json.code === '200' || json.code === '0');
+}
+
+function buildYiyunHeaders() {
+  return {
+    Authorization: currentAuthToken,
+    appid: 'xbd26b55ce68bdee0b8',
+    'X-Lt-Language': 'zh',
+    Accept: 'application/json, text/plain, */*',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Content-Type': 'application/json'
+  };
+}
+
+async function fetchYiyunJsonWithFallback(pathWithQuery, debugContext) {
+  const candidates = [
+    `https://yy.singbada.cn/api${pathWithQuery}`,
+    `https://yy.singbada.cn${pathWithQuery}`
+  ];
+  let lastError = null;
+  for (const url of candidates) {
+    try {
+      debugLog('请求衣云接口', { ...debugContext, url });
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: buildYiyunHeaders()
+      });
+      debugLog('衣云接口HTTP响应', { ...debugContext, url, status: resp.status, ok: resp.ok });
+      if (!resp.ok) {
+        lastError = new Error(`HTTP ${resp.status}`);
+        continue;
+      }
+      const json = await resp.json();
+      return { url, json };
+    } catch (e) {
+      lastError = e;
+      debugWarn('衣云接口请求失败，尝试备用路径', {
+        ...debugContext,
+        url,
+        error: e?.message || String(e)
+      });
+    }
+  }
+  throw lastError || new Error('请求衣云接口失败');
+}
+
+async function fetchPurchaseOrderIndexList(orderSnStyleSn, purchaseSn) {
+  if (!orderSnStyleSn || !purchaseSn || !currentAuthToken) return [];
+  const cacheKey = `${orderSnStyleSn}||${purchaseSn}`;
+  const cached = purchaseOrderIndexCache.get(cacheKey);
+  if (cached) return cached;
+  const task = (async () => {
+    try {
+      const params = new URLSearchParams({
+        order_sn_style_sn: String(orderSnStyleSn),
+        purchase_sn: String(purchaseSn),
+        page: '1',
+        limit: '200',
+        pay_request_status: '1,2,3'
+      });
+      const pathWithQuery = `/apc/purchase.purchaseOrder/index?${params.toString()}`;
+      const { url, json } = await fetchYiyunJsonWithFallback(pathWithQuery, {
+        api: 'purchase.purchaseOrder.index',
+        orderSnStyleSn,
+        purchaseSn
+      });
+      const list = json?.data?.list;
+      if (isApiSuccess(json) && Array.isArray(list)) return list;
+      debugWarn('采购订单接口业务响应异常', { orderSnStyleSn, purchaseSn, url, code: json?.code, msg: json?.msg });
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      debugError('采购订单接口请求异常', { orderSnStyleSn, purchaseSn, error: e?.message || String(e) });
+      return [];
+    }
+  })();
+  purchaseOrderIndexCache.set(cacheKey, task);
+  const result = await task;
+  purchaseOrderIndexCache.set(cacheKey, result);
+  return result;
+}
+
+function pickPurchaseDetailCandidatesFromPurchaseOrderList(list) {
+  const out = [];
+  list.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const detailKeys = ['detail', 'details', 'purchase_detail', 'purchase_details', 'purchase_detail_list', 'material_list'];
+    detailKeys.forEach((k) => {
+      const v = item?.[k];
+      if (Array.isArray(v)) out.push(...v);
+    });
+  });
+  return out.filter((d) => d && typeof d === 'object' && d.purchase_detail_id !== undefined && d.purchase_detail_id !== null && String(d.purchase_detail_id).trim() !== '');
+}
+
+function matchScorePurchaseDetail(detail, hints) {
+  if (!detail || typeof detail !== 'object') return 0;
+  const name = String(pick(detail, ['material_name', 'om_material_name', 'supplier_material_name', 'goods_name', 'name']) || '').trim();
+  const color = String(pick(detail, ['material_color', 'supplier_color', 'color_name', 'color']) || '').trim();
+  const type = String(pick(detail, ['material_item', 'order_material_items', 'order_material_item', 'type_name', 'material_type', 'category_name']) || '').trim();
+  const design = String(pick(detail, ['design_code']) || '').trim();
+  let score = 0;
+  if (hints.materialName && name && hints.materialName === name) score += 4;
+  if (hints.materialColor && color && hints.materialColor === color) score += 2;
+  if (hints.materialType && type && hints.materialType === type) score += 1;
+  if (hints.designCode && design && hints.designCode === design) score += 2;
+  if (hints.materialName && name && hints.materialName !== name && (name.includes(hints.materialName) || hints.materialName.includes(name))) score += 1;
+  return score;
+}
+
+async function resolvePurchaseDetailId(record) {
+  const direct = pick(record, ['purchase_detail_id']);
+  if (direct !== '') return String(direct).trim();
+  const orderSnStyleSn = resolveOrderSnStyleSnForPurchaseIndex(record);
+  const purchaseSn = resolvePurchaseSnFromRecord(record);
+  if (!orderSnStyleSn || !purchaseSn) return '';
+  const list = await fetchPurchaseOrderIndexList(orderSnStyleSn, purchaseSn);
+  if (!Array.isArray(list) || !list.length) return '';
+  const candidates = pickPurchaseDetailCandidatesFromPurchaseOrderList(list);
+  if (!candidates.length) return '';
+  const hints = resolveRecordMaterialHints(record);
+  let best = null;
+  let bestScore = -1;
+  candidates.forEach((d) => {
+    const score = matchScorePurchaseDetail(d, hints);
+    if (score > bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  });
+  if (best) return String(best.purchase_detail_id).trim();
+  return String(candidates[0].purchase_detail_id).trim();
+}
+
+async function fetchSlipCountByPurchaseDetailId(purchaseDetailId) {
+  if (!purchaseDetailId || !currentAuthToken) return null;
+  const pid = String(purchaseDetailId).trim();
+  if (!pid) return null;
+  const cached = purchaseDetailSlipCountCache.get(pid);
+  if (cached !== undefined) return cached;
+  const task = (async () => {
+    try {
+      const params = new URLSearchParams({ purchase_detail_id: pid });
+      const pathWithQuery = `/apc/purchase.purchaseOrder/selectDelivery?${params.toString()}`;
+      const { url, json } = await fetchYiyunJsonWithFallback(pathWithQuery, {
+        api: 'purchase.purchaseOrder.selectDelivery',
+        purchaseDetailId: pid
+      });
+      const delivery = Array.isArray(json?.data?.delivery) ? json.data.delivery : [];
+      if (!isApiSuccess(json)) {
+        debugWarn('送货明细接口业务响应异常', { purchaseDetailId: pid, url, code: json?.code, msg: json?.msg });
+        if (!delivery.length) return null;
+      }
+      const sum = delivery.reduce((acc, item) => {
+        const n = Number(item?.slip_num);
+        if (!Number.isFinite(n)) return acc;
+        return acc + n;
+      }, 0);
+      const count = Math.round(sum);
+      return count > 0 ? count : null;
+    } catch (e) {
+      debugError('送货明细接口请求异常', { purchaseDetailId: pid, error: e?.message || String(e) });
+      return null;
+    }
+  })();
+  purchaseDetailSlipCountCache.set(pid, task);
+  const result = await task;
+  purchaseDetailSlipCountCache.set(pid, result);
+  return result;
+}
+
+function expandRecordsBySlipCount(records) {
+  const out = [];
+  records.forEach((record) => {
+    const count = Number(record?.__sticker_slip_count);
+    const n = Number.isFinite(count) ? Math.round(count) : 0;
+    const repeat = n > 0 ? n : 1;
+    for (let i = 0; i < repeat; i++) out.push(record);
+  });
+  return out;
+}
+
+async function runDeliveryDebugTest(input = {}) {
+  const oldOrderId = String(input.oldOrderId || input.orderSnStyleSn || '').trim();
+  const purchaseSn = String(input.purchaseSn || '').trim();
+  const directPurchaseDetailId = String(input.purchaseDetailId || '').trim();
+  const debugInfo = {
+    oldOrderId,
+    purchaseSn,
+    directPurchaseDetailId,
+    hasToken: Boolean(currentAuthToken)
+  };
+  debugLog('开始送货条数自测', debugInfo);
+  if (!currentAuthToken) {
+    debugWarn('送货条数自测失败：当前页面还未捕获到 Authorization');
+    return { ok: false, stage: 'token', ...debugInfo };
+  }
+  let purchaseDetailId = directPurchaseDetailId;
+  let purchaseListCount = 0;
+  if (!purchaseDetailId) {
+    const list = await fetchPurchaseOrderIndexList(oldOrderId, purchaseSn);
+    purchaseListCount = Array.isArray(list) ? list.length : 0;
+    const detailCandidates = pickPurchaseDetailCandidatesFromPurchaseOrderList(list);
+    purchaseDetailId = detailCandidates[0]?.purchase_detail_id ? String(detailCandidates[0].purchase_detail_id).trim() : '';
+    debugLog('送货条数自测：采购订单接口结果', {
+      oldOrderId,
+      purchaseSn,
+      purchaseListCount,
+      detailCandidateCount: detailCandidates.length,
+      purchaseDetailId: purchaseDetailId || '-'
+    });
+  }
+  if (!purchaseDetailId) {
+    debugWarn('送货条数自测失败：未解析到 purchase_detail_id', {
+      oldOrderId,
+      purchaseSn,
+      purchaseListCount
+    });
+    return {
+      ok: false,
+      stage: 'purchase_detail_id',
+      oldOrderId,
+      purchaseSn,
+      purchaseListCount
+    };
+  }
+  const slipCount = await fetchSlipCountByPurchaseDetailId(purchaseDetailId);
+  const result = {
+    ok: slipCount !== null,
+    stage: slipCount !== null ? 'done' : 'slip_num',
+    oldOrderId,
+    purchaseSn,
+    purchaseDetailId,
+    slipCount
+  };
+  debugLog('送货条数自测完成', result);
+  return result;
+}
+
+if (isTopWindow) {
+  window.__stickerDebugTestDelivery = runDeliveryDebugTest;
+  window.__stickerSetToken = (token) => {
+    currentAuthToken = String(token || '').trim();
+    debugLog('已手动设置 Token', { hasToken: Boolean(currentAuthToken), token: maskToken(currentAuthToken) });
+    return Boolean(currentAuthToken);
+  };
+}
+
 async function fetchOrderIdByKeyword(keyword) {
   if (!keyword || !currentAuthToken) return null;
   try {
@@ -546,7 +971,7 @@ async function handlePrint() {
 
   const btn = document.getElementById('sticker-print-btn');
   const originalText = btn.innerText;
-  btn.innerText = '正在获取加工方...';
+  btn.innerText = '正在获取加工方与条数...';
   btn.disabled = true;
 
   try {
@@ -554,44 +979,54 @@ async function handlePrint() {
     debugLog('展开后待打印记录数', recordsToPrint.length);
     
     if (currentAuthToken) {
-        await Promise.all(recordsToPrint.map(async (record) => {
-            let oid = resolveOrderIdFromRecord(record);
-            const fallbackKeyword = pick(record, ['old_order_ids', 'old_order_id', 'order_sn', 'order_no', 'purchase_sn', 'style_sns', 'style_sn']);
-            debugLog('准备获取加工方', {
-              rawOrderId: oid || '-',
-              fallbackKeyword: fallbackKeyword || '-',
-              purchaseSn: pick(record, ['purchase_sn']) || '-',
-              oldOrderId: pick(record, ['old_order_ids', 'old_order_id']) || '-'
-            });
-            if (!isPositiveIntegerString(oid) && fallbackKeyword) {
-                const lookedUp = await fetchOrderIdByKeyword(fallbackKeyword);
-                if (lookedUp) {
-                  oid = lookedUp;
-                  debugLog('反查到可用 order_id', { fallbackKeyword, orderId: oid });
-                }
-            }
-            if (isPositiveIntegerString(oid)) {
-              const factory = await fetchFactoryName(oid);
-              if (factory) {
-                record.sewing_factory_name = factory;
-                debugLog('加工方获取成功', { orderId: oid, factory });
-              } else {
-                debugWarn('加工方获取为空', { orderId: oid });
-              }
-            } else {
-              debugWarn('记录缺少可用数字 order_id，已跳过加工方请求', {
-                rawOrderId: resolveOrderIdFromRecord(record) || '-',
-                fallbackKeyword: fallbackKeyword || '-',
-                purchaseSn: pick(record, ['purchase_sn']) || '-',
-                oldOrderId: pick(record, ['old_order_ids', 'old_order_id']) || '-'
-              });
-            }
-        }));
+      await Promise.all(recordsToPrint.map(async (record) => {
+        let oid = resolveOrderIdFromRecord(record);
+        const fallbackKeyword = pick(record, ['old_order_ids', 'old_order_id', 'order_sn', 'order_no', 'purchase_sn', 'style_sns', 'style_sn']);
+        debugLog('准备获取加工方', {
+          rawOrderId: oid || '-',
+          fallbackKeyword: fallbackKeyword || '-',
+          purchaseSn: pick(record, ['purchase_sn']) || '-',
+          oldOrderId: pick(record, ['old_order_ids', 'old_order_id']) || '-'
+        });
+        if (!isPositiveIntegerString(oid) && fallbackKeyword) {
+          const lookedUp = await fetchOrderIdByKeyword(fallbackKeyword);
+          if (lookedUp) {
+            oid = lookedUp;
+            debugLog('反查到可用 order_id', { fallbackKeyword, orderId: oid });
+          }
+        }
+        if (isPositiveIntegerString(oid)) {
+          const factory = await fetchFactoryName(oid);
+          if (factory) {
+            record.sewing_factory_name = factory;
+            debugLog('加工方获取成功', { orderId: oid, factory });
+          } else {
+            debugWarn('加工方获取为空', { orderId: oid });
+          }
+        } else {
+          debugWarn('记录缺少可用数字 order_id，已跳过加工方请求', {
+            rawOrderId: resolveOrderIdFromRecord(record) || '-',
+            fallbackKeyword: fallbackKeyword || '-',
+            purchaseSn: pick(record, ['purchase_sn']) || '-',
+            oldOrderId: pick(record, ['old_order_ids', 'old_order_id']) || '-'
+          });
+        }
+
+        const purchaseDetailId = await resolvePurchaseDetailId(record);
+        if (!purchaseDetailId) return;
+        const slipCount = await fetchSlipCountByPurchaseDetailId(purchaseDetailId);
+        if (!slipCount) return;
+        record.__sticker_purchase_detail_id = purchaseDetailId;
+        record.__sticker_slip_count = slipCount;
+        debugLog('送货条数获取成功', { purchaseDetailId, slipCount });
+      }));
     } else {
-        debugWarn('无可用 Token，跳过加工方请求');
+      debugWarn('无可用 Token，跳过加工方与送货条数请求');
     }
 
-    const items = recordsToPrint
+    const expandedBySlip = expandRecordsBySlipCount(recordsToPrint);
+    debugLog('按条数展开后待打印记录数', expandedBySlip.length);
+    const items = expandedBySlip
       .map(mapApiItemToSticker)
       .filter((item) => item.orderNo || item.purchaseOrderNo || item.materialName || item.itemNo);
     const missingSupplierCount = items.filter((item) => item.supplier === '-').length;
@@ -623,21 +1058,24 @@ async function handlePrint() {
   }
 }
 
-function injectButton() {
+async function injectButton() {
   if (!isTargetPurchasingPage()) {
     removeActionButtons();
     return;
   }
+  const container = await ensureButtonContainer();
+  if (!container) return;
   if (!document.getElementById('sticker-refresh-btn')) {
     const refreshBtn = document.createElement('button');
     refreshBtn.id = 'sticker-refresh-btn';
     refreshBtn.className = 'sticker-print-btn sticker-refresh-btn';
     refreshBtn.innerText = BUTTON_TEXT_REFRESH;
     refreshBtn.onclick = async () => {
+      if (buttonsDragging || Date.now() < suppressButtonClickUntil) return;
       if (refreshInProgress) return;
       await refreshCurrentPageData(true);
     };
-    document.body.appendChild(refreshBtn);
+    container.appendChild(refreshBtn);
   }
   if (!document.getElementById('sticker-print-btn')) {
     const btn = document.createElement('button');
@@ -645,6 +1083,7 @@ function injectButton() {
     btn.className = 'sticker-print-btn';
     btn.innerText = BUTTON_TEXT_PRINT;
     btn.onclick = async () => {
+      if (buttonsDragging || Date.now() < suppressButtonClickUntil) return;
       if (!cachedApiRecords.length) {
         const ok = await refreshCurrentPageData(false);
         if (!ok) {
@@ -654,7 +1093,7 @@ function injectButton() {
       }
       handlePrint();
     };
-    document.body.appendChild(btn);
+    container.appendChild(btn);
   }
   refreshButtonCount();
 }

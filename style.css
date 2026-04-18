@@ -1,9 +1,18 @@
 /* Print Button Style */
-.sticker-print-btn {
+.sticker-btn-container {
   position: fixed;
-  bottom: 20px;
   right: 20px;
+  bottom: 92px;
   z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+  touch-action: none;
+}
+
+.sticker-print-btn {
+  position: static;
   padding: 10px 20px;
   background-color: #409eff;
   color: white;
@@ -20,7 +29,6 @@
 }
 
 .sticker-refresh-btn {
-  bottom: 72px;
   background-color: #67c23a;
 }
 
@@ -196,27 +204,60 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       background: #fff; /* Ensure white background */
+  }
+
+  .footer-label-group {
+      flex: 0 0 190px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
   }
 
   .footer-label {
       font-size: 18px;
       font-weight: bold;
+      flex: 0 0 auto;
+      line-height: 1.2;
+      white-space: nowrap;
+  }
+
+  .footer-main {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: baseline;
+      justify-content: flex-end;
+      gap: 4px;
+      min-width: 0;
   }
 
   .footer-value {
       font-size: 28px;
       font-weight: 900;
       color: #003366; /* Dark Blue as requested */
-      margin-left: auto;
-      margin-right: 5px;
+      margin-left: 0;
+      margin-right: 0;
+      line-height: 1;
+      white-space: nowrap;
   }
   
   .footer-unit {
       font-size: 18px;
       font-weight: bold;
       color: #003366;
-      margin-top: 6px; /* Align baseline visually */
+      line-height: 1.1;
+      white-space: nowrap;
+  }
+
+  .footer-slip {
+      flex: 0 0 auto;
+      font-size: 16px;
+      font-weight: 900;
+      line-height: 1.1;
+      color: #111;
+      white-space: nowrap;
   }
 
   /* Helper to fill page */
