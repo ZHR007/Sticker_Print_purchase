@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sticker Printer",
-  "version": "1.2",
+  "version": "1.3",
   "description": "Print purchase order stickers from the current page.",
   "icons": {
     "16": "icons/icon16.png",
